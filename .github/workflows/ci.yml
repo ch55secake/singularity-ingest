@@ -33,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98
         with:
           components: rustfmt
       - name: Cache Rust dependencies
@@ -48,7 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98
         with:
           components: clippy
       - name: Cache Rust dependencies
@@ -71,9 +71,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98
         with:
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -96,9 +96,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98
         with:
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
