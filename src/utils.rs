@@ -7,6 +7,25 @@ use tracing::debug;
 use ureq::Error::StatusCode;
 
 static HTTP_CLIENT: OnceLock<ureq::Agent> = OnceLock::new();
+static INGEST_URL: OnceLock<String> = OnceLock::new();
+static INGEST_TOKEN: OnceLock<Option<String>> = OnceLock::new();
+
+const DEFAULT_INGEST_URL: &str = "https://api.deadlock-api.com/v1/matches/salts";
+
+fn ingest_url() -> &'static str {
+    INGEST_URL
+        .get_or_init(|| {
+            std::env::var("SINGULARITY_INGEST_URL")
+                .unwrap_or_else(|_| DEFAULT_INGEST_URL.to_string())
+        })
+        .as_str()
+}
+
+fn ingest_token() -> Option<&'static str> {
+    INGEST_TOKEN
+        .get_or_init(|| std::env::var("SINGULARITY_INGEST_TOKEN").ok())
+        .as_deref()
+}
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct Salts {
@@ -81,10 +100,14 @@ impl Salts {
         loop {
             attempt += 1;
             debug!("Ingesting salts: {self:?} (retry {attempt}/{max_retries})");
-            let response = HTTP_CLIENT
-                .get_or_init(ureq::Agent::new_with_defaults)
-                .post("https://api.deadlock-api.com/v1/matches/salts")
-                .send_json([self]);
+            let agent = HTTP_CLIENT.get_or_init(ureq::Agent::new_with_defaults);
+            let response = match ingest_token() {
+                Some(token) => agent
+                    .post(ingest_url())
+                    .header("Authorization", format!("Bearer {token}"))
+                    .send_json([self]),
+                None => agent.post(ingest_url()).send_json([self]),
+            };
             match response {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(mut resp) if attempt == max_retries => {
@@ -111,10 +134,14 @@ impl Salts {
                 debug!("Ingesting {num_salts} salts");
             }
 
-            let response = HTTP_CLIENT
-                .get_or_init(ureq::Agent::new_with_defaults)
-                .post("https://api.deadlock-api.com/v1/matches/salts")
-                .send_json(salts);
+            let agent = HTTP_CLIENT.get_or_init(ureq::Agent::new_with_defaults);
+            let response = match ingest_token() {
+                Some(token) => agent
+                    .post(ingest_url())
+                    .header("Authorization", format!("Bearer {token}"))
+                    .send_json(salts),
+                None => agent.post(ingest_url()).send_json(salts),
+            };
             match response {
                 Ok(r) if r.status().is_success() => return Ok(()),
                 Ok(mut resp) if attempt == max_retries => {

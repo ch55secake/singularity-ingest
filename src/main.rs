@@ -19,11 +19,11 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Deadlock API Ingest — uploads match data from Steam's HTTP cache.
+/// Singularity Ingest — uploads Deadlock match salts from Steam's HTTP cache.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// Disable Steam Game Coordinator match-salt recovery
+    /// Keep Steam Game Coordinator recovery disabled (compatibility flag).
     #[arg(long)]
     no_gc: bool,
 
@@ -31,20 +31,15 @@ struct Args {
     #[arg(long)]
     once: bool,
 
-    /// Recover salts for your own match history via the Steam Game Coordinator, then exit
-    #[arg(long, conflicts_with_all = ["once", "no_gc", "command"])]
-    own_matches: bool,
-
     /// Game command to wrap (launch wrapper mode).
     /// When provided, the watcher runs in the background while the game
     /// runs as a child process, and exits when the game exits.
-    /// Usage: deadlock-api-ingest -- %command%
+    /// Usage: singularity-ingest -- %command%
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     command: Vec<String>,
 }
 
 mod error;
-mod gc;
 mod ingestion_cache;
 mod scan_cache;
 mod steam_user;
@@ -89,7 +84,7 @@ fn init_tracing() {
 
 /// Takes an exclusive lock so only one long-running watcher exists per user. Without it,
 /// every `Start-ScheduledTask` (or a manual launch next to the autostart) adds another
-/// copy, and the copies fight over the GC quota store. Exits if another instance holds it;
+/// copy. Exits if another instance holds it;
 /// returns `None` (and runs unlocked) if the lock file itself can't be set up.
 fn acquire_instance_lock() -> Option<File> {
     let dir = dirs::data_dir()?.join("deadlock-api-ingest");
@@ -137,8 +132,12 @@ fn main() {
         info!("Log files are being written to: {}", log_dir.display());
     }
 
-    if args.own_matches {
-        std::process::exit(i32::from(!gc::run_own_matches_blocking()));
+    // Cache reading is the only behavior in the Singularity baseline. Keep the
+    // compatibility flag parsed so existing Windows tasks remain valid.
+    if args.no_gc {
+        info!("Cache-only mode explicitly requested");
+    } else {
+        info!("Cache-only mode active; Game Coordinator recovery is disabled");
     }
 
     // Only the long-running watcher is single-instance: `--once` is a short manual run, and
@@ -203,14 +202,7 @@ fn main() {
     scan_cache::initial_cache_dir_ingest(&cache_dir);
 
     if args.once {
-        if !args.no_gc {
-            gc::run_pass_blocking();
-        }
         std::process::exit(0);
-    }
-
-    if !args.no_gc {
-        gc::spawn_background();
     }
 
     loop {

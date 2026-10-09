@@ -19,29 +19,9 @@ walkdir = "2.5.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
 sysinfo = { version = "0.39.1", default-features = false, features = ["system"] }
-
-# Steam Game Coordinator match-salt recovery (see src/gc/).
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-prost = "0.14"
-steam-vent = { git = "https://github.com/deadlock-api/steam-vent", rev = "098ae675ab698d642e93c4c650cab79f3fc7d130" }
-valveprotos = { git = "https://github.com/deadlock-api/deadlock-api", rev = "328a51b6b1857a9092d3dd1e5c79609a2e61202d", features = [
-    "gc-common",
-    "gc-client",
-    "serde",
-] }
-# Local Steam session recovery (ConnectCache decrypt).
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-sha2 = "0.10"
-crc32fast = "1.4"
-hex = "0.4"
-base64 = "0.22"
-keyvalues-parser = "0.2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.56.0"
-windows-dpapi = "0.2.0"
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winres = "0.1"

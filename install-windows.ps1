@@ -264,7 +264,9 @@ WshShell.Run """$ExecutablePath""" & args, 0, True
                 Set-Content -Path $vbsWrapperPath -Value $vbsContent -Force
 
                 # Define the action (run the VBS wrapper with wscript.exe, forwarding extra args to the exe)
-                $vbsArgs = "`"$vbsWrapperPath`""
+                # Singularity's scheduled deployment is cache-only. GC recovery
+                # must remain an explicit manual opt-in.
+                $vbsArgs = "`"$vbsWrapperPath`" --no-gc"
                 $taskAction = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $vbsArgs -WorkingDirectory $InstallDir
 
                 # Define the trigger (when to run it - at user logon)
@@ -559,11 +561,12 @@ try {
 
         if ($createShortcut) {
             # Create main shortcut
-            New-DesktopShortcut -ExecutablePath $downloadPath
+            New-DesktopShortcut -ExecutablePath $downloadPath `
+                -Arguments "--no-gc"
 
             # Create "once" shortcut for initial cache ingest only
             New-DesktopShortcut -ExecutablePath $downloadPath `
-                -Arguments "--once" `
+                -Arguments "--no-gc --once" `
                 -ShortcutName "$AppName (Once)" `
                 -Description "Deadlock API Ingest - Scan existing Steam cache once and exit"
 
