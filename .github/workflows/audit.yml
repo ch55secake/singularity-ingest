@@ -1,4 +1,4 @@
-name: Audit
+name: Dependency Audit
 
 on:
   push:
@@ -14,18 +14,24 @@ on:
 
 permissions:
   contents: read
-  issues: write
   checks: write
+  issues: write
+
+concurrency:
+  group: audit-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
+    name: Cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - id: install
-        run: |
-          rustup override set stable
-          rustup update stable
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
