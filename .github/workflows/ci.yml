@@ -18,7 +18,7 @@ env:
 
 jobs:
   actionlint:
-    name: Validate workflows
+    name: validate-workflows
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,7 +27,7 @@ jobs:
         uses: raven-actions/actionlint@v2
 
   format:
-    name: Format
+    name: format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,7 +42,7 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
+    name: clippy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,7 +57,7 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
   test:
-    name: Test (${{ matrix.os }})
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -82,7 +82,7 @@ jobs:
         run: cargo test --all-targets --locked --target ${{ matrix.target }}
 
   build:
-    name: Build (${{ matrix.os }})
+    name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -107,7 +107,7 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
   shellcheck:
-    name: Shellcheck installer
+    name: shellcheck-installer
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -116,7 +116,7 @@ jobs:
         uses: ludeeus/action-shellcheck@master
 
   powershell:
-    name: PowerShell analysis
+    name: powershell-analysis
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

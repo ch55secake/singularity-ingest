@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   audit:
-    name: Cargo audit
+    name: cargo-audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
