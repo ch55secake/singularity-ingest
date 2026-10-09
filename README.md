@@ -32,6 +32,14 @@ $env:SINGULARITY_INGEST_URL = "https://singularity.example/ingest/salts"
 $env:SINGULARITY_INGEST_TOKEN = "replace-with-a-client-token"
 ```
 
+For a Windows scheduled task, persist the values at user scope before logging
+back in:
+
+```powershell
+[Environment]::SetEnvironmentVariable("SINGULARITY_INGEST_URL", "https://singularity.example/ingest/salts", "User")
+[Environment]::SetEnvironmentVariable("SINGULARITY_INGEST_TOKEN", "replace-with-a-client-token", "User")
+```
+
 The token is sent as:
 
 ```text
