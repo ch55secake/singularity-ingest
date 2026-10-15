@@ -1,17 +1,22 @@
 use crate::ingestion_cache;
 use crate::utils::Salts;
+use core::time::Duration;
 use memchr::{memchr, memmem};
 use notify::event::{CreateKind, ModifyKind};
 use notify::{EventKind, RecursiveMode, Watcher};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::Instant;
 use tracing::{debug, info, warn};
 
 const DEADLOCK_APP_ID: &str = "1422450";
 const MAX_BYTES_TO_READ: usize = 200;
 const SEARCH_SEQUENCE: &[u8; 10] = b".valve.net";
 const PATH_END_MARKERS: [u8; 6] = *b" '\0\n\r\"";
+const CACHE_RESCAN_INTERVAL: Duration = Duration::from_mins(5);
 
 pub(super) fn scan_directory(dir: &Path, results: &mut Vec<String>) {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -23,8 +28,6 @@ pub(super) fn scan_directory(dir: &Path, results: &mut Vec<String>) {
             } else if path.is_file()
                 && let Some(url) = extract_replay_url(&path)
             {
-                let file_path = path.display().to_string();
-                info!("Found: {file_path} -> {url}");
                 results.push(url);
             }
         }
@@ -87,14 +90,17 @@ pub(super) fn initial_cache_dir_ingest(cache_dir: &Path) {
     debug!("Scanning cache directory: {}", cache_dir.display());
     let mut results = Vec::new();
     scan_directory(cache_dir, &mut results);
+    let mut seen = HashSet::new();
     let salts = results
         .into_iter()
         .filter_map(|url| Salts::from_url(&url))
+        .filter(|salt| is_new_salt(salt) && seen.insert(*salt))
         .collect::<Vec<_>>();
 
     if salts.is_empty() {
         return;
     }
+    info!("Found {} new salts in Steam's HTTP cache", salts.len());
 
     match Salts::ingest_many(&salts) {
         Ok(..) => {
@@ -112,8 +118,24 @@ pub(super) fn watch_cache_dir(cache_dir: &Path) -> notify::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx)?;
     watcher.watch(cache_dir, RecursiveMode::Recursive)?;
+    let mut next_rescan = Instant::now() + CACHE_RESCAN_INTERVAL;
 
-    while let Ok(Ok(event)) = rx.recv() {
+    loop {
+        let wait = next_rescan.saturating_duration_since(Instant::now());
+        let event = match rx.recv_timeout(wait) {
+            Ok(Ok(event)) => event,
+            Ok(Err(error)) => {
+                warn!("Cache watcher error: {error:?}");
+                continue;
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                debug!("Periodic Steam cache rescan");
+                initial_cache_dir_ingest(cache_dir);
+                next_rescan = Instant::now() + CACHE_RESCAN_INTERVAL;
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         let is_data_modify = matches!(event.kind, EventKind::Modify(ModifyKind::Data(_)));
         let is_file_create = matches!(
             event.kind,
@@ -128,12 +150,7 @@ pub(super) fn watch_cache_dir(cache_dir: &Path) -> notify::Result<()> {
                 && let Some(salts) = Salts::from_url(&url)
             {
                 // Check if we've already ingested this salt using the shared cache
-                let is_new_metadata = salts.metadata_salt.is_some()
-                    && !ingestion_cache::is_ingested(salts.match_id, true);
-                let is_new_replay = salts.replay_salt.is_some()
-                    && !ingestion_cache::is_ingested(salts.match_id, false);
-
-                if !is_new_metadata && !is_new_replay {
+                if !is_new_salt(&salts) {
                     continue;
                 }
 
@@ -148,4 +165,9 @@ pub(super) fn watch_cache_dir(cache_dir: &Path) -> notify::Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_new_salt(salts: &Salts) -> bool {
+    (salts.metadata_salt.is_some() && !ingestion_cache::is_ingested(salts.match_id, true))
+        || (salts.replay_salt.is_some() && !ingestion_cache::is_ingested(salts.match_id, false))
 }
