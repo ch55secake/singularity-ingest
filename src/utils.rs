@@ -27,6 +27,39 @@ fn ingest_token() -> Option<&'static str> {
         .as_deref()
 }
 
+/// Where match start and end reports go: `SINGULARITY_LIVE_URL`, or the
+/// `/ingest/live` path next to a Singularity `.../ingest/salts` URL.
+pub(crate) fn live_url() -> Option<String> {
+    if let Ok(url) = std::env::var("SINGULARITY_LIVE_URL")
+        && !url.trim().is_empty()
+    {
+        return Some(url);
+    }
+    live_url_for(&std::env::var("SINGULARITY_INGEST_URL").ok()?)
+}
+
+fn live_url_for(ingest_url: &str) -> Option<String> {
+    let base = ingest_url
+        .trim_end_matches('/')
+        .strip_suffix("/ingest/salts")?;
+    Some(format!("{base}/ingest/live"))
+}
+
+/// POSTs one JSON body with the collector token.
+pub(crate) fn post_json<T: Serialize>(url: &str, body: &T) -> Result<(), String> {
+    let agent = HTTP_CLIENT.get_or_init(ureq::Agent::new_with_defaults);
+    let request = agent.post(url);
+    let request = match ingest_token() {
+        Some(token) => request.header("Authorization", format!("Bearer {token}")),
+        None => request,
+    };
+    match request.send_json(body) {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!("HTTP {}", response.status())),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct Salts {
     pub(super) match_id: u64,
@@ -160,6 +193,15 @@ impl Salts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derives_the_live_url_from_a_singularity_ingest_url() {
+        assert_eq!(
+            live_url_for("http://192.168.1.110:8080/ingest/salts").as_deref(),
+            Some("http://192.168.1.110:8080/ingest/live")
+        );
+        assert_eq!(live_url_for(DEFAULT_INGEST_URL), None);
+    }
 
     #[test]
     fn test_extract_salts() {
