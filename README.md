@@ -48,6 +48,22 @@ Authorization: Bearer <token>
 
 ## Windows usage
 
+Published Singularity releases include a Windows installer. Download the
+installer from the fork rather than the upstream `deadlock-api-ingest` project:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://raw.githubusercontent.com/ch55secake/singularity-ingest/master/install-windows.ps1" `
+  -OutFile "$env:TEMP\singularity-install.ps1"
+Unblock-File "$env:TEMP\singularity-install.ps1"
+& "$env:TEMP\singularity-install.ps1"
+```
+
+The installer prompts for the private `/ingest/salts` URL and collector token,
+stores them in the Windows user environment, downloads the latest Singularity
+Windows release, and can create a logon scheduled task. A release must exist in
+the fork before running the installer.
+
 Cache-only mode is enabled by default:
 
 ```powershell
@@ -60,9 +76,9 @@ Scan the existing cache once and exit:
 & "$env:LOCALAPPDATA\deadlock-api-ingest\deadlock-api-ingest.exe" --no-gc --once
 ```
 
-The existing upstream installer can create a scheduled task. Configure the
-task to pass `--no-gc`; do not enable automatic GC recovery for Singularity's
-cache-only deployment.
+The installer can create a scheduled task. Configure the task to pass
+`--no-gc`; do not enable automatic GC recovery for Singularity's cache-only
+deployment.
 
 ## Game Coordinator code
 

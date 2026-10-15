@@ -1,14 +1,17 @@
-# Deadlock API Ingest - Windows Installation Script
+# Singularity Ingest - Windows Installation Script
 # This script downloads and installs the application to run automatically on user login via Task Scheduler.
 
 # Suppress PSScriptAnalyzer warnings for Write-Host in this interactive installation script
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification='Interactive installation script requires colored console output for user experience')]
-param()
+param(
+    [string]$IngestUrl = ""
+)
 
 # --- Configuration ---
 $AppName = "deadlock-api-ingest"
-$GithubRepo = "deadlock-api/deadlock-api-ingest"
-$AssetKeyword = "windows-latest.exe"
+$GithubRepo = "ch55secake/singularity-ingest"
+$AssetKeyword = "windows-x86_64.exe"
+$UninstallScriptUrl = "https://raw.githubusercontent.com/ch55secake/singularity-ingest/master/uninstall-windows.ps1"
 
 # Installation Paths
 $InstallDir = "$env:LOCALAPPDATA\$AppName"
@@ -156,14 +159,14 @@ function Test-IsAdmin {
 
 # Function to get the latest release from GitHub
 function Get-LatestRelease {
-    Write-InstallLog -Level 'INFO' "Fetching latest release from repository: $GithubRepo"
+    Write-InstallLog -Level 'INFO' "Fetching latest Singularity release from repository: $GithubRepo"
     $ApiUrl = "https://api.github.com/repos/$GithubRepo/releases/latest"
     try {
         $releaseInfo = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing
     }
     catch {
-        $errorMsg = "Failed to fetch release information from GitHub API."
-        $detailedError = "URL: $ApiUrl`nError: $($_.Exception.Message)`n`nPossible causes:`n- No internet connection`n- GitHub API rate limit exceeded`n- Repository not found or private`n- Firewall blocking the request"
+        $errorMsg = "Failed to fetch the latest Singularity release from GitHub."
+        $detailedError = "URL: $ApiUrl`nError: $($_.Exception.Message)`n`nPossible causes:`n- No internet connection`n- No Singularity release has been published yet`n- GitHub API rate limit exceeded`n- Repository or release is private`n- Firewall blocking the request"
         Invoke-FatalError -ErrorMessage $errorMsg -DetailedError $detailedError
     }
 
@@ -171,8 +174,8 @@ function Get-LatestRelease {
         $asset = $releaseInfo.assets | Where-Object { $_.name -like "*$AssetKeyword*" } | Select-Object -First 1
         if (-not $asset) {
             $availableAssets = if ($releaseInfo.assets) { $releaseInfo.assets.name -join ', ' } else { "None" }
-            $errorMsg = "Could not find a release asset containing the keyword: '$AssetKeyword'"
-            $detailedError = "Available assets are: $availableAssets`n`nThe release may not have been built for Windows, or the asset naming convention has changed."
+            $errorMsg = "Could not find a Windows Singularity release asset containing the keyword: '$AssetKeyword'"
+            $detailedError = "Available assets are: $availableAssets`n`nThe release must contain the x86_64 Windows asset produced by the repository release workflow."
             Invoke-FatalError -ErrorMessage $errorMsg -DetailedError $detailedError
         }
         return [PSCustomObject]@{
@@ -186,6 +189,55 @@ function Get-LatestRelease {
     }
 }
 
+# Configure the private Singularity platform endpoint and collector token.
+function Configure-SingularityEnvironment {
+    param(
+        [string]$ConfiguredUrl
+    )
+
+    $userUrl = [Environment]::GetEnvironmentVariable("SINGULARITY_INGEST_URL", "User")
+    $userToken = [Environment]::GetEnvironmentVariable("SINGULARITY_INGEST_TOKEN", "User")
+
+    if ([string]::IsNullOrWhiteSpace($ConfiguredUrl)) {
+        $ConfiguredUrl = $userUrl
+    }
+    if ([string]::IsNullOrWhiteSpace($ConfiguredUrl)) {
+        $ConfiguredUrl = Read-Host "Singularity ingest URL (for example, https://singularity.example/ingest/salts)"
+    }
+
+    try {
+        $uri = [Uri]$ConfiguredUrl
+        if ($uri.Scheme -ne "http" -and $uri.Scheme -ne "https") {
+            throw "The ingest URL must use HTTP or HTTPS."
+        }
+    }
+    catch {
+        Invoke-FatalError -ErrorMessage "Invalid Singularity ingest URL." -DetailedError $_.Exception.Message
+    }
+
+    Write-Host ""
+    Write-Host "Singularity collector tokens are stored in the Windows user environment." -ForegroundColor Yellow
+    Write-Host "Press Enter at the token prompt to keep the existing user token." -ForegroundColor Yellow
+    $secureToken = Read-Host "Singularity collector token" -AsSecureString
+    $token = [System.Net.NetworkCredential]::new("", $secureToken).Password
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        $token = $userToken
+    }
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        Invoke-FatalError -ErrorMessage "A Singularity collector token is required." -DetailedError "Create a collector credential on the Singularity platform and run the installer again."
+    }
+
+    [Environment]::SetEnvironmentVariable("SINGULARITY_INGEST_URL", $ConfiguredUrl, "User")
+    [Environment]::SetEnvironmentVariable("SINGULARITY_INGEST_TOKEN", $token, "User")
+
+    # Make the values available if the installer starts the scheduled task before
+    # the user signs out and back in.
+    $env:SINGULARITY_INGEST_URL = $ConfiguredUrl
+    $env:SINGULARITY_INGEST_TOKEN = $token
+
+    Write-InstallLog -Level 'SUCCESS' "Singularity endpoint configured: $ConfiguredUrl"
+}
+
 # Function to create desktop shortcut
 function New-DesktopShortcut {
     param(
@@ -196,7 +248,7 @@ function New-DesktopShortcut {
         [Parameter(Mandatory = $false)]
         [string]$ShortcutName = $AppName,
         [Parameter(Mandatory = $false)]
-        [string]$Description = "Deadlock API Ingest - Monitors Steam cache for Deadlock match replays"
+        [string]$Description = "Singularity Ingest - Monitors Steam cache for Deadlock match replays"
     )
 
     Write-InstallLog -Level 'INFO' "Creating desktop shortcut: $ShortcutName..."
@@ -287,7 +339,7 @@ WshShell.Run """$ExecutablePath""" & args, 0, True
                     -Hidden
 
                 # Register the task with the system
-                Register-ScheduledTask -TaskName $AppName -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Description "Monitors Steam cache for Deadlock match replays and submits metadata to the Deadlock API." | Out-Null
+                Register-ScheduledTask -TaskName $AppName -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Description "Monitors Steam cache for Deadlock match replays and submits metadata to Singularity." | Out-Null
 
                 Write-InstallLog -Level 'SUCCESS' "Startup task created successfully."
             }
@@ -306,9 +358,10 @@ WshShell.Run """$ExecutablePath""" & args, 0, True
 # Wrap the entire installation in a try-catch block
 try {
     Clear-Content -Path $LogFile -ErrorAction SilentlyContinue
-    Write-InstallLog -Level 'INFO' "Starting Deadlock API Ingest installation..."
+    Write-InstallLog -Level 'INFO' "Starting Singularity Ingest installation..."
     Write-InstallLog -Level 'INFO' "Log file is available at: $LogFile"
 
+    Configure-SingularityEnvironment -ConfiguredUrl $IngestUrl
     $release = Get-LatestRelease
 
     # Try to run uninstall script if it exists (clean uninstall before fresh install)
@@ -389,7 +442,7 @@ try {
     # Download uninstall script
     Write-InstallLog -Level 'INFO' "Downloading uninstall script..."
     $uninstallScriptPath = Join-Path -Path $InstallDir -ChildPath "uninstall-windows.ps1"
-    $uninstallScriptUrl = "https://raw.githubusercontent.com/deadlock-api/deadlock-api-ingest/master/uninstall-windows.ps1"
+    $uninstallScriptUrl = $UninstallScriptUrl
 
     try {
         Invoke-WebRequest -Uri $uninstallScriptUrl -OutFile $uninstallScriptPath -UseBasicParsing
@@ -568,7 +621,7 @@ try {
             New-DesktopShortcut -ExecutablePath $downloadPath `
                 -Arguments "--no-gc --once" `
                 -ShortcutName "$AppName (Once)" `
-                -Description "Deadlock API Ingest - Scan existing Steam cache once and exit"
+                -Description "Singularity Ingest - Scan existing Steam cache once and exit"
 
             Write-Host "Desktop shortcuts created:" -ForegroundColor White
         } else {
@@ -589,7 +642,7 @@ catch {
 # Display final status
 if (-not $script:HasErrors) {
     Write-Host " "
-    Write-InstallLog -Level 'SUCCESS' "Deadlock API Ingest has been installed successfully!"
+    Write-InstallLog -Level 'SUCCESS' "Singularity Ingest has been installed successfully!"
 
     # Check if auto-start is enabled
     $autoStartEnabled = $false
@@ -629,7 +682,7 @@ if (-not $script:HasErrors) {
     Write-Host " "
 
     # --- User-friendly usage explanation ---
-    Write-Host "How to use Deadlock API Ingest:" -ForegroundColor Green
+    Write-Host "How to use Singularity Ingest:" -ForegroundColor Green
     Write-Host "1. Restart your game after installation." -ForegroundColor Cyan
     Write-Host "2. Once in the game, go to your match history and click on 'matches'." -ForegroundColor Cyan
     Write-Host "3. The tool will now work in the background to enhance your experience!" -ForegroundColor Cyan
