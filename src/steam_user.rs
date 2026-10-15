@@ -15,16 +15,20 @@ pub(crate) fn current_steam_id3() -> Option<u32> {
 }
 
 /// Get the currently logged-in Steam user's ID64 by parsing `loginusers.vdf`.
-///
-/// Steam marks the active user with `"MostRecent" "1"` in this file.
 fn get_current_steam_id64() -> Option<u64> {
     let steam_dir = steamlocate::SteamDir::locate().ok()?;
     let vdf_path = steam_dir.path().join("config").join("loginusers.vdf");
     let content = fs::read_to_string(&vdf_path).ok()?;
+    most_recent_user(&parse_login_users(&content))
+}
 
-    parse_login_users(&content)
-        .into_iter()
+/// Older Steam clients mark the active user with `"MostRecent" "1"`; current
+/// ones leave it out, so fall back to the user who logged in last.
+fn most_recent_user(users: &[ParsedUser]) -> Option<u64> {
+    users
+        .iter()
         .find(|u| u.most_recent)
+        .or_else(|| users.iter().max_by_key(|u| u.timestamp))
         .map(|u| u.steam_id)
 }
 
@@ -32,6 +36,7 @@ fn get_current_steam_id64() -> Option<u64> {
 struct ParsedUser {
     steam_id: u64,
     most_recent: bool,
+    timestamp: u64,
 }
 
 fn parse_login_users(content: &str) -> Vec<ParsedUser> {
@@ -61,6 +66,10 @@ fn parse_login_users(content: &str) -> Vec<ParsedUser> {
                 users.push(ParsedUser {
                     steam_id,
                     most_recent: props.get("MostRecent").is_some_and(|v| v == "1"),
+                    timestamp: props
+                        .get("timestamp")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -111,4 +120,31 @@ fn extract_all_quoted(s: &str) -> Vec<String> {
         }
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const USERS: &str = "\"users\"\n{\n\t\"76561198964081794\"\n\t{\n\t\t\"AccountName\"\t\t\"a\"\n\t\t\"AutoLogin\"\t\t\"1\"\n\t\t\"timestamp\"\t\t\"1792061958\"\n\t}\n\t\"76561198144896682\"\n\t{\n\t\t\"AccountName\"\t\t\"b\"\n\t\t\"timestamp\"\t\t\"1789496430\"\n\t}\n}\n";
+
+    #[test]
+    fn falls_back_to_the_latest_login_without_most_recent() {
+        assert_eq!(
+            most_recent_user(&parse_login_users(USERS)),
+            Some(76561198964081794)
+        );
+    }
+
+    #[test]
+    fn prefers_the_most_recent_flag() {
+        let users = USERS.replace(
+            "\"timestamp\"\t\t\"1789496430\"",
+            "\"timestamp\"\t\t\"1789496430\"\n\t\t\"MostRecent\"\t\t\"1\"",
+        );
+        assert_eq!(
+            most_recent_user(&parse_login_users(&users)),
+            Some(76561198144896682)
+        );
+    }
 }
