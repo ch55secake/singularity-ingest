@@ -196,8 +196,7 @@ fn send(url: &str, report: &LiveReport) -> Result<(), String> {
     }
 }
 
-/// `--enable-console-log`: add `-condebug -conclearlog` for the Steam user who logged in last.
-pub(crate) fn enable_console_log() -> Result<String, String> {
+fn local_config() -> Result<(std::path::PathBuf, String), String> {
     let steam_dir =
         steamlocate::SteamDir::locate().map_err(|error| format!("Steam not found: {error}"))?;
     let account_id =
@@ -205,6 +204,19 @@ pub(crate) fn enable_console_log() -> Result<String, String> {
     let config = launch_options::local_config_path(steam_dir.path(), account_id);
     let contents = std::fs::read_to_string(&config)
         .map_err(|error| format!("cannot read {}: {error}", config.display()))?;
+    Ok((config, contents))
+}
+
+/// `--check-console-log`: whether Deadlock already launches with `-condebug`.
+pub(crate) fn console_log_enabled() -> Result<bool, String> {
+    let (_, contents) = local_config()?;
+    launch_options::has_console_log_flag(&contents)
+        .ok_or_else(|| "localconfig.vdf could not be parsed".to_string())
+}
+
+/// `--enable-console-log`: add `-condebug -conclearlog` for the Steam user who logged in last.
+pub(crate) fn enable_console_log() -> Result<String, String> {
+    let (config, contents) = local_config()?;
     match launch_options::add_console_log_flag(&contents)? {
         launch_options::Change::AlreadySet => Ok(format!(
             "Deadlock already launches with {}",

@@ -46,6 +46,7 @@ starts the log afresh on each launch), close Steam and run:
 & "$env:LOCALAPPDATA\deadlock-api-ingest\deadlock-api-ingest.exe" --enable-console-log
 ```
 
+`--check-console-log` exits 0 when the flag is already there and 3 when not.
 Steam rewrites its config when it exits, so the change is lost if Steam is
 running. The installer closes and restarts Steam for this step. A backup of the
 config is written next to it as `localconfig.vdf.singularity-backup`.
@@ -89,8 +90,9 @@ The installer:
    change it with `-IngestUrl`) and the collector token in the Windows user
    environment; without `-Token` it keeps a saved token or asks for one;
 2. downloads the latest Windows release from this fork;
-3. closes Steam, adds `-condebug -conclearlog` to Deadlock's launch options and starts Steam
-   again (skip this with `-SkipConsoleLog`; it is skipped while Deadlock runs);
+3. if Deadlock doesn't already launch with `-condebug`, closes Steam, adds
+   `-condebug -conclearlog` to the launch options and starts Steam again (skip
+   this with `-SkipConsoleLog`; it is skipped while Deadlock runs);
 4. creates and starts a hidden logon task (`conhost.exe --headless`) for the
    current user (use `-NoAutoStart` for desktop shortcuts instead).
 
