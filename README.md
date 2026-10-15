@@ -53,8 +53,8 @@ config is written next to it as `localconfig.vdf.singularity-backup`.
 
 ## Configuration
 
-The public Deadlock API remains the default destination for upstream
-compatibility. A Singularity deployment should set:
+The collector has no public Deadlock API fallback. Set the private Singularity
+salts endpoint and collector token before starting it:
 
 ```powershell
 $env:SINGULARITY_INGEST_URL = "https://singularity.example/ingest/salts"
