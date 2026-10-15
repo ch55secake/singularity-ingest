@@ -39,7 +39,8 @@ to `/ingest/live` next to the configured `/ingest/salts` URL (override it with
 `SINGULARITY_LIVE_URL`). `account_id` is the Steam account that last logged in
 on the PC. Reports are off when the ingest URL is not a Singularity URL.
 
-To add `-condebug` to Deadlock's launch options, close Steam and run:
+To add `-condebug -conclearlog` to Deadlock's launch options (`-conclearlog`
+starts the log afresh on each launch), close Steam and run:
 
 ```powershell
 & "$env:LOCALAPPDATA\deadlock-api-ingest\deadlock-api-ingest.exe" --enable-console-log
@@ -88,7 +89,7 @@ The installer:
    change it with `-IngestUrl`) and the collector token in the Windows user
    environment; without `-Token` it keeps a saved token or asks for one;
 2. downloads the latest Windows release from this fork;
-3. closes Steam, adds `-condebug` to Deadlock's launch options and starts Steam
+3. closes Steam, adds `-condebug -conclearlog` to Deadlock's launch options and starts Steam
    again (skip this with `-SkipConsoleLog`; it is skipped while Deadlock runs);
 4. creates and starts a hidden logon task (`conhost.exe --headless`) for the
    current user (use `-NoAutoStart` for desktop shortcuts instead).
