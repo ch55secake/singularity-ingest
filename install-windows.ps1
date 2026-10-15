@@ -1,10 +1,21 @@
 # Singularity Ingest - Windows Installation Script
-# This script downloads and installs the application to run automatically on user login via Task Scheduler.
+# Downloads the collector, points it at Singularity, makes Deadlock write its
+# console log (-condebug) and starts the collector at every logon.
+#
+# Run it as the Windows user who plays Deadlock (no administrator needed):
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/ch55secake/singularity-ingest/master/install-windows.ps1))) -Token <collector token>
 
 # Suppress PSScriptAnalyzer warnings for Write-Host in this interactive installation script
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification='Interactive installation script requires colored console output for user experience')]
 param(
-    [string]$IngestUrl = ""
+    # The Singularity ingest endpoint. Defaults to rake on the flat network.
+    [string]$IngestUrl = "http://192.168.1.110:8080/ingest/salts",
+    # The collector token. Prompted for when missing and none is saved yet.
+    [string]$Token = "",
+    # Skip the logon task and offer desktop shortcuts instead.
+    [switch]$NoAutoStart,
+    # Leave Deadlock's Steam launch options alone.
+    [switch]$SkipConsoleLog
 )
 
 # --- Configuration ---
@@ -143,20 +154,6 @@ function Invoke-Quietly {
     }
 }
 
-# Function to check for Administrator privileges
-function Test-IsAdmin {
-    try {
-        $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $isAdmin = (New-Object Security.Principal.WindowsPrincipal $currentUser).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-        if (-not $isAdmin) {
-            Invoke-FatalError -ErrorMessage "Administrator privileges are required to create scheduled tasks." -DetailedError "Please run this script as an Administrator."
-        }
-    }
-    catch {
-        Invoke-FatalError -ErrorMessage "Failed to check Administrator privileges." -DetailedError $_.Exception.Message
-    }
-}
-
 # Function to get the latest release from GitHub
 function Get-LatestRelease {
     Write-InstallLog -Level 'INFO' "Fetching latest Singularity release from repository: $GithubRepo"
@@ -192,7 +189,8 @@ function Get-LatestRelease {
 # Configure the private Singularity platform endpoint and collector token.
 function Configure-SingularityEnvironment {
     param(
-        [string]$ConfiguredUrl
+        [string]$ConfiguredUrl,
+        [string]$ConfiguredToken
     )
 
     $userUrl = [Environment]::GetEnvironmentVariable("SINGULARITY_INGEST_URL", "User")
@@ -215,13 +213,15 @@ function Configure-SingularityEnvironment {
         Invoke-FatalError -ErrorMessage "Invalid Singularity ingest URL." -DetailedError $_.Exception.Message
     }
 
-    Write-Host ""
-    Write-Host "Singularity collector tokens are stored in the Windows user environment." -ForegroundColor Yellow
-    Write-Host "Press Enter at the token prompt to keep the existing user token." -ForegroundColor Yellow
-    $secureToken = Read-Host "Singularity collector token" -AsSecureString
-    $token = [System.Net.NetworkCredential]::new("", $secureToken).Password
+    $token = $ConfiguredToken
     if ([string]::IsNullOrWhiteSpace($token)) {
         $token = $userToken
+    }
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        Write-Host ""
+        Write-Host "Singularity collector tokens are stored in the Windows user environment." -ForegroundColor Yellow
+        $secureToken = Read-Host "Singularity collector token" -AsSecureString
+        $token = [System.Net.NetworkCredential]::new("", $secureToken).Password
     }
     if ([string]::IsNullOrWhiteSpace($token)) {
         Invoke-FatalError -ErrorMessage "A Singularity collector token is required." -DetailedError "Create a collector credential on the Singularity platform and run the installer again."
@@ -302,32 +302,18 @@ function Set-StartupTask {
             Write-InstallLog -Level 'INFO' "Creating startup task..."
 
             try {
-                # Create a VBS wrapper script to run the executable hidden
-                $vbsWrapperPath = Join-Path -Path $InstallDir -ChildPath "run-hidden.vbs"
-                $vbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-args = ""
-For Each arg In WScript.Arguments
-    args = args & " " & arg
-Next
-' Wait for the exe so the scheduler tracks its real lifetime (MultipleInstances applies)
-WshShell.Run """$ExecutablePath""" & args, 0, True
-"@
-                Set-Content -Path $vbsWrapperPath -Value $vbsContent -Force
+                # Run the collector without a console window. conhost --headless
+                # replaces the old VBScript wrapper, which newer Windows builds remove.
+                Remove-Item -Path (Join-Path -Path $InstallDir -ChildPath "run-hidden.vbs") -ErrorAction SilentlyContinue
+                $taskArgs = "--headless `"$ExecutablePath`" --no-gc"
+                $taskAction = New-ScheduledTaskAction -Execute "conhost.exe" -Argument $taskArgs -WorkingDirectory $InstallDir
 
-                # Define the action (run the VBS wrapper with wscript.exe, forwarding extra args to the exe)
-                # Singularity's scheduled deployment is cache-only. GC recovery
-                # must remain an explicit manual opt-in.
-                $vbsArgs = "`"$vbsWrapperPath`" --no-gc"
-                $taskAction = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $vbsArgs -WorkingDirectory $InstallDir
-
-                # Define the trigger (when to run it - at user logon)
-                $taskTrigger = New-ScheduledTaskTrigger -AtLogOn
-
-                # Define the user and permissions (run as current user with standard privileges).
-                # Interactive, not S4U: an S4U token can't unlock the user's DPAPI keys, so the
-                # saved Steam session could never be decrypted and the GC pass would never run.
-                $taskPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+                # Run as the current user with standard privileges. The account name
+                # comes from the user's token: USERDOMAIN can be WORKGROUP (for example
+                # over SSH), which the Task Scheduler rejects.
+                $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+                $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+                $taskPrincipal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 
                 # Define settings (allow it to run indefinitely, prevent multiple instances)
                 $taskSettings = New-ScheduledTaskSettingsSet `
@@ -353,6 +339,65 @@ WshShell.Run """$ExecutablePath""" & args, 0, True
 
 
 
+# Make Deadlock write game/citadel/console.log (-condebug), which is how the
+# collector sees a match start. Steam rewrites its config when it exits, so
+# Steam is closed for the change and started again afterwards.
+function Enable-DeadlockConsoleLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath
+    )
+
+    if (Get-Process -Name "deadlock" -ErrorAction SilentlyContinue) {
+        Write-InstallLog -Level 'WARN' "Deadlock is running, so its launch options were not changed. Close the game and run the installer again."
+        $script:HasErrors = $true
+        $script:ErrorDetails += "Deadlock console log not enabled because the game was running"
+        return
+    }
+
+    $steamExe = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -ErrorAction SilentlyContinue).SteamExe
+    $steamWasRunning = [bool](Get-Process -Name "steam" -ErrorAction SilentlyContinue)
+    if ($steamWasRunning) {
+        if (-not $steamExe) {
+            Write-InstallLog -Level 'WARN' "Steam is running but its location is unknown. Close Steam and run the installer again to enable the console log."
+            $script:HasErrors = $true
+            $script:ErrorDetails += "Deadlock console log not enabled because Steam could not be closed"
+            return
+        }
+        Write-InstallLog -Level 'INFO' "Closing Steam to add -condebug to Deadlock's launch options. It will start again afterwards."
+        Start-Process -FilePath $steamExe -ArgumentList "-shutdown"
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Process -Name "steam" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+        }
+        if (Get-Process -Name "steam" -ErrorAction SilentlyContinue) {
+            Write-InstallLog -Level 'WARN' "Steam did not close within a minute. Close Steam and run the installer again to enable the console log."
+            $script:HasErrors = $true
+            $script:ErrorDetails += "Deadlock console log not enabled because Steam did not close"
+            return
+        }
+        # Steam writes its config files on the way out.
+        Start-Sleep -Seconds 2
+    }
+
+    $output = & $ExecutablePath --enable-console-log 2>&1
+    Add-Content -Path $LogFile -Value $output
+    if ($LASTEXITCODE -eq 0) {
+        Write-InstallLog -Level 'SUCCESS' "Deadlock will write its console log (launch option -condebug)."
+    } else {
+        Write-InstallLog -Level 'WARN' "Could not add -condebug to Deadlock's launch options. Add it by hand: Steam > Deadlock > Properties > Launch Options."
+        $script:HasErrors = $true
+        $script:ErrorDetails += "Deadlock console log not enabled (see $LogFile)"
+    }
+
+    if ($steamWasRunning) {
+        Start-Process -FilePath $steamExe
+        Write-InstallLog -Level 'INFO' "Steam started again."
+    }
+}
+
+
+
 # --- Main Installation Logic ---
 
 # Wrap the entire installation in a try-catch block
@@ -361,7 +406,7 @@ try {
     Write-InstallLog -Level 'INFO' "Starting Singularity Ingest installation..."
     Write-InstallLog -Level 'INFO' "Log file is available at: $LogFile"
 
-    Configure-SingularityEnvironment -ConfiguredUrl $IngestUrl
+    Configure-SingularityEnvironment -ConfiguredUrl $IngestUrl -ConfiguredToken $Token
     $release = Get-LatestRelease
 
     # Try to run uninstall script if it exists (clean uninstall before fresh install)
@@ -459,80 +504,19 @@ try {
 
     # Check if running in interactive mode (used by all prompts below)
     $isInteractive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    $timeoutSeconds = 10
 
-    # Ask user if they want auto-start
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "      AUTO-START SETUP (OPTIONAL)      " -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Auto-start will automatically start the application when the system boots." -ForegroundColor White
-    Write-Host "This ensures the application is always running in the background." -ForegroundColor White
-    Write-Host "CAREFUL: This requires Administrator privileges to create a scheduled task." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Enable auto-start on system boot? (Y/N): " -ForegroundColor Yellow -NoNewline
-
-    $enableAutoStart = $false
-    $autoStartAttempts = 0
-    $maxAutoStartAttempts = 2
-
-    if (-not $isInteractive) {
-        Write-Host "Y (default in non-interactive mode)" -ForegroundColor Cyan
-        Write-InstallLog -Level 'INFO' "Non-interactive mode detected. Enabling auto-start by default."
-        $enableAutoStart = $true
+    if ($SkipConsoleLog) {
+        Write-InstallLog -Level 'WARN' "Skipping the Deadlock console log. Match starts will not be posted in Discord."
     } else {
-        # Try to read with timeout
-        $timeoutSeconds = 10
-        $startTime = Get-Date
-        $keyPressed = $false
-
-        while ($autoStartAttempts -lt $maxAutoStartAttempts -and -not $keyPressed) {
-            if ([Console]::KeyAvailable) {
-                $response = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-                $key = $response.Character.ToString().ToUpper()
-
-                if ($key -eq "Y" -or $key -eq "N") {
-                    Write-Host $key -ForegroundColor Cyan
-                    if ($key -eq "Y") {
-                        $enableAutoStart = $true
-                    }
-                    $keyPressed = $true
-                    break
-                } else {
-                    $autoStartAttempts++
-                    if ($autoStartAttempts -lt $maxAutoStartAttempts) {
-                        Write-Host ""
-                        Write-Host "Invalid response. Please enter 'Y' for yes or 'N' for no." -ForegroundColor Yellow
-                        Write-Host "Enable auto-start on system boot? (Y/N): " -ForegroundColor Yellow -NoNewline
-                    }
-                }
-            }
-
-            # Check timeout
-            if (((Get-Date) - $startTime).TotalSeconds -ge $timeoutSeconds -and -not $keyPressed) {
-                Write-Host "Y (timeout - defaulting to yes)" -ForegroundColor Cyan
-                Write-InstallLog -Level 'INFO' "No response received within $timeoutSeconds seconds. Enabling auto-start by default."
-                $enableAutoStart = $true
-                $keyPressed = $true
-                break
-            }
-
-            Start-Sleep -Milliseconds 100
-        }
-
-        if (-not $keyPressed) {
-            Write-Host "Y (max attempts reached - defaulting to yes)" -ForegroundColor Cyan
-            Write-InstallLog -Level 'INFO' "Maximum attempts reached. Enabling auto-start by default."
-            $enableAutoStart = $true
-        }
+        Enable-DeadlockConsoleLog -ExecutablePath $downloadPath
     }
 
+    $enableAutoStart = -not $NoAutoStart
     Write-Host ""
 
     if ($enableAutoStart) {
-        Write-InstallLog -Level 'INFO' "User chose to enable auto-start."
-        # Create the main scheduled task
-        Test-IsAdmin
+        Write-InstallLog -Level 'INFO' "Enabling auto-start at logon."
         Set-StartupTask -Action 'Create' -ExecutablePath $downloadPath
 
         # Start the main task
@@ -549,7 +533,7 @@ try {
             $script:ErrorDetails += "Task start failed (non-critical)"
         }
     } else {
-        Write-InstallLog -Level 'INFO' "User chose to skip auto-start."
+        Write-InstallLog -Level 'INFO' "Auto-start skipped (-NoAutoStart)."
         Write-Host "Auto-start will not be enabled." -ForegroundColor Yellow
         Write-Host ""
 
@@ -629,7 +613,7 @@ try {
             Write-Host "To run once (ingest existing cache only): $downloadPath --once" -ForegroundColor White
         }
 
-        Write-Host "To enable auto-start later, re-run this installer." -ForegroundColor White
+        Write-Host "To enable auto-start later, re-run this installer without -NoAutoStart." -ForegroundColor White
         Write-Host ""
     }
 
@@ -683,9 +667,10 @@ if (-not $script:HasErrors) {
 
     # --- User-friendly usage explanation ---
     Write-Host "How to use Singularity Ingest:" -ForegroundColor Green
-    Write-Host "1. Restart your game after installation." -ForegroundColor Cyan
-    Write-Host "2. Once in the game, go to your match history and click on 'matches'." -ForegroundColor Cyan
-    Write-Host "3. The tool will now work in the background to enhance your experience!" -ForegroundColor Cyan
+    Write-Host "1. Play Deadlock as normal. The collector runs in the background." -ForegroundColor Cyan
+    Write-Host "2. When a match starts, the Discord bot posts both teams within a few minutes." -ForegroundColor Cyan
+    Write-Host "3. After the match, it appears on the Singularity website and in Discord." -ForegroundColor Cyan
+    Write-Host "4. Older matches: open them in the in-game match history to send them too." -ForegroundColor Cyan
     Write-Host "If you have any questions, check the README or reach out for support.`n" -ForegroundColor Yellow
 } else {
     Write-Host " "
