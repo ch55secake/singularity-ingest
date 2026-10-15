@@ -22,6 +22,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Singularity Ingest — uploads Deadlock match salts from Steam's HTTP cache.
 #[derive(Parser)]
 #[command(version)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 struct Args {
     /// Keep Steam Game Coordinator recovery disabled (compatibility flag).
     #[arg(long)]
@@ -35,6 +36,10 @@ struct Args {
     /// first: Steam rewrites its config when it exits.
     #[arg(long)]
     enable_console_log: bool,
+
+    /// Exit 0 if Deadlock's launch options include -condebug, 3 if not.
+    #[arg(long)]
+    check_console_log: bool,
 
     /// Game command to wrap (launch wrapper mode).
     /// When provided, the watcher runs in the background while the game
@@ -131,10 +136,24 @@ fn run_launch_wrapper<F: FnOnce() + Send + 'static>(background_work: F, command:
     }
 }
 
-fn main() {
-    init_tracing();
-
-    let args = Args::parse();
+/// Handles --check-console-log and --enable-console-log, which exit when done.
+fn run_console_log_command(args: &Args) {
+    if args.check_console_log {
+        match live::console_log_enabled() {
+            Ok(true) => {
+                info!("Deadlock launches with the console log enabled");
+                std::process::exit(0);
+            }
+            Ok(false) => {
+                info!("Deadlock's launch options do not enable the console log");
+                std::process::exit(3);
+            }
+            Err(error) => {
+                error!("Could not read Deadlock's launch options: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     if args.enable_console_log {
         match live::enable_console_log() {
@@ -148,6 +167,14 @@ fn main() {
             }
         }
     }
+}
+
+fn main() {
+    init_tracing();
+
+    let args = Args::parse();
+
+    run_console_log_command(&args);
 
     if let Some(log_dir) = get_log_dir() {
         info!("Log files are being written to: {}", log_dir.display());

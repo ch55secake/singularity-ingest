@@ -348,6 +348,12 @@ function Enable-DeadlockConsoleLog {
         [string]$ExecutablePath
     )
 
+    & $ExecutablePath --check-console-log 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-InstallLog -Level 'SUCCESS' "Deadlock already writes its console log (-condebug)."
+        return
+    }
+
     if (Get-Process -Name "deadlock" -ErrorAction SilentlyContinue) {
         Write-InstallLog -Level 'WARN' "Deadlock is running, so its launch options were not changed. Close the game and run the installer again."
         $script:HasErrors = $true
