@@ -13,6 +13,7 @@ The baseline supports:
 
 - Windows and Linux Steam installations.
 - Recursive startup cache scanning.
+- Recursive cache rescans every five minutes.
 - Filesystem notification-based incremental scanning.
 - `.meta.bz2` and `.dem.bz2` replay URL parsing.
 - Configurable HTTPS ingestion endpoint.

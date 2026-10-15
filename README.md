@@ -21,8 +21,9 @@ match ID + cluster + metadata/replay salt
 Singularity platform
 ```
 
-The collector reads at most the first 200 bytes of changed cache files. It
-performs one recursive scan at startup and then uses filesystem notifications.
+The collector reads at most the first 200 bytes of cache files. It scans
+recursively at startup, watches filesystem notifications, and repeats the
+recursive scan every five minutes to catch missed notifications.
 
 ### Match start and end
 
