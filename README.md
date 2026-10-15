@@ -2,7 +2,9 @@
 
 Singularity Ingest is a lightweight Windows/Linux client that watches Steam's
 local HTTP cache for Deadlock replay URLs and submits only the resulting match
-IDs and salts to a configured ingestion endpoint.
+IDs and salts to a configured ingestion endpoint. It also watches the game's
+console log and tells the platform when a match starts and ends, so the Discord
+bot can post both teams and the platform can fetch the match afterwards.
 
 The default mode is **cache-only**. It does not connect to the Steam Game
 Coordinator, read game memory, download replay files, or send Steam passwords.
@@ -21,6 +23,31 @@ Singularity platform
 
 The collector reads at most the first 200 bytes of changed cache files. It
 performs one recursive scan at startup and then uses filesystem notifications.
+
+### Match start and end
+
+The collector finds the Deadlock install from Steam's library folders and
+follows `game/citadel/console.log`, which the game writes when it is launched
+with `-condebug`. When the game logs `Lobby … for Match <match id> created` (a
+match has started) or `… destroyed` (the player left it), the collector sends:
+
+```json
+{"match_id": 117420947, "event": "started", "account_id": 1003816066}
+```
+
+to `/ingest/live` next to the configured `/ingest/salts` URL (override it with
+`SINGULARITY_LIVE_URL`). `account_id` is the Steam account that last logged in
+on the PC. Reports are off when the ingest URL is not a Singularity URL.
+
+To add `-condebug` to Deadlock's launch options, close Steam and run:
+
+```powershell
+& "$env:LOCALAPPDATA\deadlock-api-ingest\deadlock-api-ingest.exe" --enable-console-log
+```
+
+Steam rewrites its config when it exits, so the change is lost if Steam is
+running. The installer closes and restarts Steam for this step. A backup of the
+config is written next to it as `localconfig.vdf.singularity-backup`.
 
 ## Configuration
 
@@ -48,21 +75,25 @@ Authorization: Bearer <token>
 
 ## Windows usage
 
-Published Singularity releases include a Windows installer. Download the
-installer from the fork rather than the upstream `deadlock-api-ingest` project:
+Install in one step from PowerShell, signed in as the Windows user who plays
+Deadlock (administrator rights are not needed):
 
 ```powershell
-Invoke-WebRequest `
-  -Uri "https://raw.githubusercontent.com/ch55secake/singularity-ingest/master/install-windows.ps1" `
-  -OutFile "$env:TEMP\singularity-install.ps1"
-Unblock-File "$env:TEMP\singularity-install.ps1"
-& "$env:TEMP\singularity-install.ps1"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ch55secake/singularity-ingest/master/install-windows.ps1))) -Token <collector token>
 ```
 
-The installer prompts for the private `/ingest/salts` URL and collector token,
-stores them in the Windows user environment, downloads the latest Singularity
-Windows release, and can create a logon scheduled task. A release must exist in
-the fork before running the installer.
+The installer:
+
+1. stores the ingest URL (default `http://192.168.1.110:8080/ingest/salts`,
+   change it with `-IngestUrl`) and the collector token in the Windows user
+   environment; without `-Token` it keeps a saved token or asks for one;
+2. downloads the latest Windows release from this fork;
+3. closes Steam, adds `-condebug` to Deadlock's launch options and starts Steam
+   again (skip this with `-SkipConsoleLog`; it is skipped while Deadlock runs);
+4. creates and starts a hidden logon task (`conhost.exe --headless`) for the
+   current user (use `-NoAutoStart` for desktop shortcuts instead).
+
+A release must exist in the fork before running the installer.
 
 Cache-only mode is enabled by default:
 
