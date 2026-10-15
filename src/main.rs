@@ -31,6 +31,11 @@ struct Args {
     #[arg(long)]
     once: bool,
 
+    /// Add -condebug to Deadlock's Steam launch options and exit. Close Steam
+    /// first: Steam rewrites its config when it exits.
+    #[arg(long)]
+    enable_console_log: bool,
+
     /// Game command to wrap (launch wrapper mode).
     /// When provided, the watcher runs in the background while the game
     /// runs as a child process, and exits when the game exits.
@@ -40,7 +45,10 @@ struct Args {
 }
 
 mod error;
+mod game;
 mod ingestion_cache;
+mod launch_options;
+mod live;
 mod scan_cache;
 mod steam_user;
 mod utils;
@@ -128,6 +136,19 @@ fn main() {
 
     let args = Args::parse();
 
+    if args.enable_console_log {
+        match live::enable_console_log() {
+            Ok(message) => {
+                info!("{message}");
+                std::process::exit(0);
+            }
+            Err(error) => {
+                error!("Could not enable the Deadlock console log: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(log_dir) = get_log_dir() {
         info!("Log files are being written to: {}", log_dir.display());
     }
@@ -181,6 +202,15 @@ fn main() {
             std::thread::sleep(core::time::Duration::from_secs(30));
             return;
         }
+    }
+
+    if let Some(dir) = game::install_dir() {
+        info!("Deadlock install: {}", dir.display());
+    } else {
+        warn!("Deadlock install not found in any Steam library");
+    }
+    if !args.once {
+        std::thread::spawn(live::watch);
     }
 
     if !args.command.is_empty() {
