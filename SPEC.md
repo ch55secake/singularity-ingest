@@ -61,7 +61,7 @@ password or authentication credential.
 
 | Variable | Required | Default |
 |---|---:|---|
-| `SINGULARITY_INGEST_URL` | No | Public Deadlock API salts endpoint |
+| `SINGULARITY_INGEST_URL` | Yes | None; must be explicitly configured |
 | `SINGULARITY_INGEST_TOKEN` | No | No authorization header |
 
 ## Acceptance criteria

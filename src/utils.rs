@@ -7,18 +7,23 @@ use tracing::debug;
 use ureq::Error::StatusCode;
 
 static HTTP_CLIENT: OnceLock<ureq::Agent> = OnceLock::new();
-static INGEST_URL: OnceLock<String> = OnceLock::new();
+static INGEST_URL: OnceLock<Option<String>> = OnceLock::new();
 static INGEST_TOKEN: OnceLock<Option<String>> = OnceLock::new();
 
-const DEFAULT_INGEST_URL: &str = "https://api.deadlock-api.com/v1/matches/salts";
-
-fn ingest_url() -> &'static str {
+pub(crate) fn ingest_url() -> Result<&'static str, Error> {
     INGEST_URL
         .get_or_init(|| {
             std::env::var("SINGULARITY_INGEST_URL")
-                .unwrap_or_else(|_| DEFAULT_INGEST_URL.to_string())
+                .ok()
+                .and_then(|value| nonempty_url(&value))
         })
-        .as_str()
+        .as_deref()
+        .ok_or(Error::IngestUrlNotConfigured)
+}
+
+fn nonempty_url(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn ingest_token() -> Option<&'static str> {
@@ -126,6 +131,7 @@ impl Salts {
         if self.match_id > 10000000000 {
             return Err(Error::MatchIdTooLarge);
         }
+        let url = ingest_url()?;
 
         let max_retries = 10;
         let mut attempt = 0;
@@ -136,10 +142,10 @@ impl Salts {
             let agent = HTTP_CLIENT.get_or_init(ureq::Agent::new_with_defaults);
             let response = match ingest_token() {
                 Some(token) => agent
-                    .post(ingest_url())
+                    .post(url)
                     .header("Authorization", format!("Bearer {token}"))
                     .send_json([self]),
-                None => agent.post(ingest_url()).send_json([self]),
+                None => agent.post(url).send_json([self]),
             };
             match response {
                 Ok(r) if r.status().is_success() => return Ok(()),
@@ -156,6 +162,7 @@ impl Salts {
     }
 
     pub(crate) fn ingest_many(salts: &[Salts]) -> Result<(), Error> {
+        let url = ingest_url()?;
         let max_retries = 10;
         let num_salts = salts.len();
         let mut attempt = 0;
@@ -170,10 +177,10 @@ impl Salts {
             let agent = HTTP_CLIENT.get_or_init(ureq::Agent::new_with_defaults);
             let response = match ingest_token() {
                 Some(token) => agent
-                    .post(ingest_url())
+                    .post(url)
                     .header("Authorization", format!("Bearer {token}"))
                     .send_json(salts),
-                None => agent.post(ingest_url()).send_json(salts),
+                None => agent.post(url).send_json(salts),
             };
             match response {
                 Ok(r) if r.status().is_success() => return Ok(()),
@@ -200,7 +207,17 @@ mod tests {
             live_url_for("http://192.168.1.110:8080/ingest/salts").as_deref(),
             Some("http://192.168.1.110:8080/ingest/live")
         );
-        assert_eq!(live_url_for(DEFAULT_INGEST_URL), None);
+        assert_eq!(live_url_for("https://example.com/other/path"), None);
+    }
+
+    #[test]
+    fn rejects_missing_or_blank_ingest_urls() {
+        assert_eq!(nonempty_url(""), None);
+        assert_eq!(nonempty_url("  \n"), None);
+        assert_eq!(
+            nonempty_url(" https://singularity.example/ingest/salts ").as_deref(),
+            Some("https://singularity.example/ingest/salts")
+        );
     }
 
     #[test]

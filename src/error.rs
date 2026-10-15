@@ -3,6 +3,7 @@ use core::fmt::Display;
 
 pub(crate) enum Error {
     MatchIdTooLarge,
+    IngestUrlNotConfigured,
     FailedToIngest(String),
     Ureq(ureq::Error),
 }
@@ -19,6 +20,10 @@ impl Debug for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::MatchIdTooLarge => write!(f, "Match ID too large"),
+            Error::IngestUrlNotConfigured => write!(
+                f,
+                "SINGULARITY_INGEST_URL must be set to the private Singularity /ingest/salts endpoint"
+            ),
             Error::FailedToIngest(s) => write!(f, "Failed to ingest: {s}"),
             Error::Ureq(e) => write!(f, "Ureq error: {e:?}"),
         }

@@ -176,6 +176,11 @@ fn main() {
 
     run_console_log_command(&args);
 
+    if let Err(error) = utils::ingest_url() {
+        error!("{error}");
+        std::process::exit(2);
+    }
+
     if let Some(log_dir) = get_log_dir() {
         info!("Log files are being written to: {}", log_dir.display());
     }
