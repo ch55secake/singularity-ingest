@@ -364,7 +364,7 @@ function Enable-DeadlockConsoleLog {
             $script:ErrorDetails += "Deadlock console log not enabled because Steam could not be closed"
             return
         }
-        Write-InstallLog -Level 'INFO' "Closing Steam to add -condebug to Deadlock's launch options. It will start again afterwards."
+        Write-InstallLog -Level 'INFO' "Closing Steam to add -condebug -conclearlog to Deadlock's launch options. It will start again afterwards."
         Start-Process -FilePath $steamExe -ArgumentList "-shutdown"
         $deadline = (Get-Date).AddSeconds(60)
         while ((Get-Process -Name "steam" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
@@ -383,9 +383,9 @@ function Enable-DeadlockConsoleLog {
     $output = & $ExecutablePath --enable-console-log 2>&1
     Add-Content -Path $LogFile -Value $output
     if ($LASTEXITCODE -eq 0) {
-        Write-InstallLog -Level 'SUCCESS' "Deadlock will write its console log (launch option -condebug)."
+        Write-InstallLog -Level 'SUCCESS' "Deadlock will write its console log (launch options -condebug -conclearlog)."
     } else {
-        Write-InstallLog -Level 'WARN' "Could not add -condebug to Deadlock's launch options. Add it by hand: Steam > Deadlock > Properties > Launch Options."
+        Write-InstallLog -Level 'WARN' "Could not add -condebug -conclearlog to Deadlock's launch options. Add them by hand: Steam > Deadlock > Properties > Launch Options."
         $script:HasErrors = $true
         $script:ErrorDetails += "Deadlock console log not enabled (see $LogFile)"
     }

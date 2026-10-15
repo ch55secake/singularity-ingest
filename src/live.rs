@@ -196,7 +196,7 @@ fn send(url: &str, report: &LiveReport) -> Result<(), String> {
     }
 }
 
-/// `--enable-console-log`: add `-condebug` for the Steam user who logged in last.
+/// `--enable-console-log`: add `-condebug -conclearlog` for the Steam user who logged in last.
 pub(crate) fn enable_console_log() -> Result<String, String> {
     let steam_dir =
         steamlocate::SteamDir::locate().map_err(|error| format!("Steam not found: {error}"))?;
@@ -213,8 +213,7 @@ pub(crate) fn enable_console_log() -> Result<String, String> {
         launch_options::Change::Updated(updated) => {
             write_with_backup(&config, &contents, &updated)?;
             Ok(format!(
-                "Added {} to Deadlock's launch options in {}",
-                launch_options::CONSOLE_LOG_FLAG,
+                "Updated Deadlock's launch options in {}",
                 config.display()
             ))
         }

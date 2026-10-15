@@ -1,7 +1,8 @@
-//! Adds `-condebug` to Deadlock's Steam launch options.
+//! Adds `-condebug -conclearlog` to Deadlock's Steam launch options.
 //!
 //! With `-condebug` the game writes its console to `game/citadel/console.log`,
-//! which is how the collector sees a match start. Steam keeps launch options in
+//! which is how the collector sees a match start; `-conclearlog` starts that
+//! file afresh on each launch so it doesn't grow forever. Steam keeps launch options in
 //! `userdata/<account id>/config/localconfig.vdf` and rewrites that file when it
 //! exits, so the edit only sticks while Steam is closed.
 
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::game::DEADLOCK_APP_ID;
 
 pub(crate) const CONSOLE_LOG_FLAG: &str = "-condebug";
+const LAUNCH_FLAGS: [&str; 2] = [CONSOLE_LOG_FLAG, "-conclearlog"];
 const APPS_PATH: [&str; 5] = ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"];
 
 /// A key and its value in a VDF file, with the byte ranges needed to edit it in place.
@@ -55,10 +57,10 @@ pub(crate) fn has_console_log_flag(contents: &str) -> Option<bool> {
             Value::Text(range) => Some(&contents[range.clone()]),
             Value::Block { .. } => None,
         });
-    Some(options.is_some_and(contains_flag))
+    Some(options.is_some_and(|options| contains_flag(options, CONSOLE_LOG_FLAG)))
 }
 
-/// Returns the file with `-condebug` added to Deadlock's launch options.
+/// Returns the file with `-condebug -conclearlog` added to Deadlock's launch options.
 pub(crate) fn add_console_log_flag(contents: &str) -> Result<Change, String> {
     let nodes = parse(contents).ok_or("localconfig.vdf could not be parsed")?;
     let apps_node = find_path(&nodes, &APPS_PATH).ok_or("localconfig.vdf has no apps section")?;
@@ -79,14 +81,19 @@ pub(crate) fn add_console_log_flag(contents: &str) -> Result<Change, String> {
                 ..
             }) => {
                 let current = &contents[range.clone()];
-                if contains_flag(current) {
+                let missing = LAUNCH_FLAGS
+                    .into_iter()
+                    .filter(|flag| !contains_flag(current, flag))
+                    .collect::<Vec<_>>();
+                if missing.is_empty() {
                     return Ok(Change::AlreadySet);
                 }
-                let options = if current.trim().is_empty() {
-                    CONSOLE_LOG_FLAG.to_string()
-                } else {
-                    format!("{} {CONSOLE_LOG_FLAG}", current.trim_end())
-                };
+                let options = [current.trim_end()]
+                    .into_iter()
+                    .chain(missing)
+                    .filter(|part| !part.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 (range.start, range.end, options)
             }
             Some(_) => return Err("LaunchOptions in localconfig.vdf is not text".into()),
@@ -94,8 +101,9 @@ pub(crate) fn add_console_log_flag(contents: &str) -> Result<Change, String> {
                 *open,
                 *open,
                 format!(
-                    "\n{}\"LaunchOptions\"\t\t\"{CONSOLE_LOG_FLAG}\"",
-                    tabs(depth + 1)
+                    "\n{}\"LaunchOptions\"\t\t\"{}\"",
+                    tabs(depth + 1),
+                    LAUNCH_FLAGS.join(" ")
                 ),
             ),
         },
@@ -106,9 +114,10 @@ pub(crate) fn add_console_log_flag(contents: &str) -> Result<Change, String> {
             *apps_open,
             *apps_open,
             format!(
-                "\n{indent}\"{app_id}\"\n{indent}{{\n{inner}\"LaunchOptions\"\t\t\"{CONSOLE_LOG_FLAG}\"\n{indent}}}",
+                "\n{indent}\"{app_id}\"\n{indent}{{\n{inner}\"LaunchOptions\"\t\t\"{flags}\"\n{indent}}}",
                 indent = tabs(depth),
                 inner = tabs(depth + 1),
+                flags = LAUNCH_FLAGS.join(" "),
             ),
         ),
     };
@@ -119,10 +128,10 @@ pub(crate) fn add_console_log_flag(contents: &str) -> Result<Change, String> {
     Ok(Change::Updated(updated))
 }
 
-fn contains_flag(options: &str) -> bool {
+fn contains_flag(options: &str, flag: &str) -> bool {
     options
         .split_whitespace()
-        .any(|word| word.eq_ignore_ascii_case(CONSOLE_LOG_FLAG))
+        .any(|word| word.eq_ignore_ascii_case(flag))
 }
 
 fn tabs(count: usize) -> String {
@@ -266,7 +275,7 @@ mod tests {
     fn adds_launch_options_to_an_existing_app_block() {
         let result = updated(WITHOUT_OPTIONS);
         assert!(result.contains(
-            "\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-condebug\"\n\t\t\t\t\t\t\"LastPlayed\""
+            "\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-condebug -conclearlog\"\n\t\t\t\t\t\t\"LastPlayed\""
         ));
         // The unrelated top-level "apps" entry is left alone.
         assert!(result.contains("\t\t\"1422450\"\t\t\"00696e\""));
@@ -282,23 +291,36 @@ mod tests {
         );
         assert_eq!(has_console_log_flag(&contents), Some(false));
         let result = updated(&contents);
-        assert!(result.contains("\"LaunchOptions\"\t\t\"-novid +fps_max 240 -condebug\""));
+        assert!(
+            result.contains("\"LaunchOptions\"\t\t\"-novid +fps_max 240 -condebug -conclearlog\"")
+        );
     }
 
     #[test]
     fn keeps_launch_options_that_already_have_the_flag() {
         let contents = WITHOUT_OPTIONS.replace(
             "\"LastPlayed\"",
-            "\"LaunchOptions\"\t\t\"-condebug -novid\"\n\t\t\t\t\t\t\"LastPlayed\"",
+            "\"LaunchOptions\"\t\t\"-conclearlog -condebug -novid\"\n\t\t\t\t\t\t\"LastPlayed\"",
         );
         assert_eq!(add_console_log_flag(&contents).unwrap(), Change::AlreadySet);
+    }
+
+    #[test]
+    fn adds_only_the_missing_flag() {
+        let contents = WITHOUT_OPTIONS.replace(
+            "\"LastPlayed\"",
+            "\"LaunchOptions\"\t\t\"-condebug\"\n\t\t\t\t\t\t\"LastPlayed\"",
+        );
+        assert_eq!(has_console_log_flag(&contents), Some(true));
+        let result = updated(&contents);
+        assert!(result.contains("\"LaunchOptions\"\t\t\"-condebug -conclearlog\""));
     }
 
     #[test]
     fn creates_the_app_block_when_deadlock_has_none() {
         let contents = WITHOUT_OPTIONS.replace("\"1422450\"\n", "\"730\"\n");
         let result = updated(&contents);
-        assert!(result.contains("\t\t\t\t{\n\t\t\t\t\t\"1422450\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-condebug\"\n\t\t\t\t\t}"));
+        assert!(result.contains("\t\t\t\t{\n\t\t\t\t\t\"1422450\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-condebug -conclearlog\"\n\t\t\t\t\t}"));
         assert_eq!(has_console_log_flag(&result), Some(true));
     }
 
@@ -309,7 +331,9 @@ mod tests {
             "\"LaunchOptions\"\t\t\"+exec \\\"my cfg\\\"\"\n\t\t\t\t\t\t\"LastPlayed\"",
         );
         let result = updated(&contents);
-        assert!(result.contains("\"LaunchOptions\"\t\t\"+exec \\\"my cfg\\\" -condebug\""));
+        assert!(
+            result.contains("\"LaunchOptions\"\t\t\"+exec \\\"my cfg\\\" -condebug -conclearlog\"")
+        );
     }
 
     #[test]
